@@ -2,7 +2,8 @@
 //! incumbents over a seeded patient corpus, scored on the continuous
 //! declared model. Criteria C1–C6 frozen in PLAN.md before this run.
 
-use hearing_gov::auditory::{feedback_cap, linked_gains, speech_at, Patient, BANDS, LEVELS, UCL_GUARD_DB};
+use hearing_gov::auditory::{speech_at, Patient, BANDS, LEVELS};
+use hearing_gov::rulebook::RULEBOOK_V1;
 use hearing_gov::fit_env::{extract_gains, FitEnv, N_STATES};
 use hearing_gov::prescriptive::{greedy, prescriptive};
 use hearing_gov::domain_engine;
@@ -15,14 +16,14 @@ fn violations(p: &Patient, g65: &[f64; BANDS]) -> usize {
         v += 1;
     }
     for k in 0..BANDS {
-        let gains = linked_gains(g65[k], k);
+        let gains = p.rulebook.linked_gains(g65[k], k);
         for (li, &level) in LEVELS.iter().enumerate() {
             if gains[li] > 0.0
-                && speech_at(level, k) + gains[li] > p.ucl[k] - UCL_GUARD_DB + 1e-9
+                && speech_at(level, k) + gains[li] > p.ucl[k] - p.rulebook.ucl_guard_db + 1e-9
             {
                 v += 1;
             }
-            if gains[li] > feedback_cap(k) + 1e-9 {
+            if gains[li] > p.rulebook.feedback_cap(k) + 1e-9 {
                 v += 1;
             }
         }
@@ -85,7 +86,7 @@ fn main() {
     let mut binding_patients = 0usize;
     let n = 40;
     for seed in 1..=n as u64 {
-        let p = Patient::generate(seed * 6151);
+        let p = Patient::generate(seed * 6151, RULEBOOK_V1);
         let t0 = Instant::now();
         let env = FitEnv::new(&p);
         let (policy, report) = domain_engine().train(&env);

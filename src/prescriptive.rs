@@ -9,9 +9,7 @@
 //! 2. The per-band-order greedy optimizer — the "obvious algorithm" the
 //!    A1 falsifier already showed loses to exact DP when the budget binds.
 
-use crate::auditory::{
-    feedback_cap, linked_gains, loudness, speech_at, Patient, BANDS, UCL_GUARD_DB,
-};
+use crate::auditory::{loudness, speech_at, Patient, BANDS};
 use crate::fit_env::{gain_of, ACTIONS};
 
 /// Snap a gain down to the harness's 4 dB action lattice (both incumbents
@@ -27,12 +25,12 @@ fn clip_band(p: &Patient, k: usize, g65: f64) -> f64 {
     // un-snapped cap would hand the incumbents 1-2 dB per band the DP's
     // action set cannot express (a measured unfairness caught by the
     // plain-DP probe).
-    let mut g = snap(g65.min(feedback_cap(k)));
+    let mut g = snap(g65.min(p.rulebook.feedback_cap(k)));
     loop {
-        let gains = linked_gains(g, k);
+        let gains = p.rulebook.linked_gains(g, k);
         let mut ok = true;
         for (li, &level) in crate::auditory::LEVELS.iter().enumerate() {
-            if speech_at(level, k) + gains[li] > p.ucl[k] - UCL_GUARD_DB {
+            if speech_at(level, k) + gains[li] > p.ucl[k] - p.rulebook.ucl_guard_db {
                 ok = false;
             }
         }
@@ -75,7 +73,7 @@ pub fn greedy(p: &Patient) -> [f64; BANDS] {
         let mut best_a = -1.0f64;
         for ai in 0..ACTIONS {
             let cand = clip_band(p, k, gain_of(ai));
-            let gains = linked_gains(cand, k);
+            let gains = p.rulebook.linked_gains(cand, k);
             let sp80 = speech_at(80.0, k);
             let cost =
                 loudness(sp80, gains[2], p.thr[k]) - loudness(sp80, 0.0, p.thr[k]);
@@ -92,7 +90,7 @@ pub fn greedy(p: &Patient) -> [f64; BANDS] {
                 best = cand;
             }
         }
-        let gains = linked_gains(best, k);
+        let gains = p.rulebook.linked_gains(best, k);
         let sp80 = speech_at(80.0, k);
         spent += loudness(sp80, gains[2], p.thr[k]) - loudness(sp80, 0.0, p.thr[k]);
         g[k] = best;
@@ -107,11 +105,11 @@ mod tests {
     #[test]
     fn incumbents_respect_the_rulebook() {
         for seed in [7u64, 42, 99] {
-            let p = Patient::generate(seed);
+            let p = Patient::generate(seed, crate::rulebook::RULEBOOK_V1);
             for g in [prescriptive(&p), greedy(&p)] {
                 assert!(p.added_loudness(&g) <= p.budget + 1e-9);
                 for k in 0..BANDS {
-                    assert!(g[k] <= feedback_cap(k) + 1e-9);
+                    assert!(g[k] <= p.rulebook.feedback_cap(k) + 1e-9);
                 }
             }
         }

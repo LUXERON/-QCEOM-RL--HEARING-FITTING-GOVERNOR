@@ -5,6 +5,8 @@
 //! discomfort budget. This is the model the policy is EXACTLY optimal on;
 //! clinical validation of the model itself is a roadmap item, not a claim.
 
+use crate::rulebook::Rulebook;
+
 pub const BANDS: usize = 18;
 
 /// ANSI S3.5 Table 3 one-third-octave band importance (160 Hz .. 8 kHz).
@@ -21,28 +23,6 @@ pub const SPEECH65: [f64; BANDS] = [
 
 /// Speech input levels evaluated (dB SPL overall): soft / average / loud.
 pub const LEVELS: [f64; 3] = [50.0, 65.0, 80.0];
-
-/// Per-band feedback-margin gain caps (dB): open-loop-gain headroom
-/// shrinks toward high frequencies (declared piecewise curve).
-pub fn feedback_cap(band: usize) -> f64 {
-    if band < 6 {
-        45.0
-    } else if band < 12 {
-        38.0
-    } else {
-        30.0
-    }
-}
-
-/// Comfort guard band below UCL (dB), declared (same discipline as the
-/// fast-charge 15 mV plating guard).
-pub const UCL_GUARD_DB: f64 = 3.0;
-
-/// Declared WDRC level linkage: soft inputs get +6 dB over the average-
-/// level gain, loud inputs −6 dB (a fixed, declared compression rule —
-/// the harness optimizes the average-level gain and the linkage follows).
-pub const WDRC_SOFT_BOOST: f64 = 6.0;
-pub const WDRC_LOUD_CUT: f64 = 6.0;
 
 /// Band speech level at a given overall input level.
 pub fn speech_at(level: f64, band: usize) -> f64 {
@@ -82,23 +62,15 @@ pub fn loudness_stevens(speech_spl: f64, gain_db: f64, thr_spl: f64) -> f64 {
     sl.powf(0.6)
 }
 
-/// Linked gains (soft, avg, loud) from the average-level gain.
-pub fn linked_gains(g65: f64, band: usize) -> [f64; 3] {
-    let cap = feedback_cap(band);
-    [
-        (g65 + WDRC_SOFT_BOOST).min(cap),
-        g65,
-        (g65 - WDRC_LOUD_CUT).max(0.0),
-    ]
-}
-
-/// A patient in the declared model: per-band thresholds and UCLs (dB SPL)
-/// plus the derived broadband loudness budget.
+/// A patient in the declared model: per-band thresholds and UCLs (dB
+/// SPL), the RULEBOOK the fit is solved against (comfort guard, feedback
+/// caps, WDRC linkage, budget fraction — versioned, see rulebook.rs),
+/// and the derived broadband added-loudness budget.
 #[derive(Debug, Clone)]
 pub struct Patient {
     pub thr: [f64; BANDS],
     pub ucl: [f64; BANDS],
-    /// Broadband loudness ceiling (declared: 0.6 × Σ loudness-at-UCL).
+    pub rulebook: Rulebook,
     pub budget: f64,
     pub seed: u64,
 }
@@ -113,8 +85,10 @@ fn splitmix(x: &mut u64) -> u64 {
 
 impl Patient {
     /// Seeded deterministic generator: flat / sloping / ski-slope /
-    /// notched audiograms with plausible UCL spreads.
-    pub fn generate(seed: u64) -> Self {
+    /// notched audiograms with plausible UCL spreads, fitted against the
+    /// given rulebook (the audiogram is rulebook-independent; the budget
+    /// derivation is not).
+    pub fn generate(seed: u64, rulebook: Rulebook) -> Self {
         let mut s = seed;
         let start = 20.0 + (splitmix(&mut s) % 21) as f64;
         let slope = (splitmix(&mut s) % 5) as f64 + 1.0;
@@ -147,8 +121,8 @@ impl Patient {
         let headroom: f64 = (0..BANDS)
             .map(|k| loudness(ucl[k], 0.0, thr[k]) - loudness(speech_at(80.0, k), 0.0, thr[k]))
             .sum();
-        let budget = 0.5 * headroom;
-        Self { thr, ucl, budget, seed }
+        let budget = rulebook.budget_fraction * headroom;
+        Self { thr, ucl, rulebook, budget, seed }
     }
 
     /// SII at one input level for a given per-band average-level gain set
@@ -158,7 +132,7 @@ impl Patient {
         let mut sii = 0.0;
         let mut loud = 0.0;
         for k in 0..BANDS {
-            let g = linked_gains(g65[k], k)[level_idx];
+            let g = self.rulebook.linked_gains(g65[k], k)[level_idx];
             let sp = speech_at(level, k);
             sii += IMPORTANCE[k] * audibility(sp, g, self.thr[k]);
             loud += loudness(sp, g, self.thr[k]);
@@ -177,7 +151,7 @@ impl Patient {
         (0..BANDS)
             .map(|k| {
                 let sp = speech_at(80.0, k);
-                let g = linked_gains(g65[k], k)[2];
+                let g = self.rulebook.linked_gains(g65[k], k)[2];
                 loudness(sp, g, self.thr[k]) - loudness(sp, 0.0, self.thr[k])
             })
             .sum()
@@ -187,6 +161,7 @@ impl Patient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rulebook::RULEBOOK_V1;
 
     #[test]
     fn importance_weights_sum_to_one() {
@@ -205,8 +180,8 @@ mod tests {
 
     #[test]
     fn patients_are_deterministic_and_plausible() {
-        let a = Patient::generate(42);
-        let b = Patient::generate(42);
+        let a = Patient::generate(42, RULEBOOK_V1);
+        let b = Patient::generate(42, RULEBOOK_V1);
         assert_eq!(a.thr, b.thr);
         assert_eq!(a.ucl, b.ucl);
         for k in 0..BANDS {
@@ -214,7 +189,7 @@ mod tests {
             assert!(a.thr[k] >= 20.0 && a.thr[k] <= 95.0);
         }
         assert!(a.budget > 0.0);
-        let c = Patient::generate(43);
+        let c = Patient::generate(43, RULEBOOK_V1);
         assert_ne!(a.thr, c.thr);
     }
 
@@ -250,8 +225,8 @@ mod tests {
         let mut binds = 0;
         let n = 40;
         for seed in 1..=n as u64 {
-            let p = Patient::generate(seed * 6151);
-            let g65: [f64; BANDS] = core::array::from_fn(feedback_cap);
+            let p = Patient::generate(seed * 6151, RULEBOOK_V1);
+            let g65: [f64; BANDS] = core::array::from_fn(|k| p.rulebook.feedback_cap(k));
             if p.added_loudness(&g65) > p.budget {
                 binds += 1;
             }

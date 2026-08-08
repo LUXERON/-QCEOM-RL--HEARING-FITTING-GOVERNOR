@@ -14,8 +14,7 @@
 //! the Bellman max: reward-neutral safety, proof-pair discipline.
 
 use crate::auditory::{
-    audibility, feedback_cap, linked_gains, loudness, speech_at, Patient,
-    BANDS, IMPORTANCE, LEVELS, UCL_GUARD_DB,
+    audibility, loudness, speech_at, Patient, BANDS, IMPORTANCE, LEVELS,
 };
 use qceom_core::{Action, Charge, ConstraintSpec, Environment, PmeConfig, SparseGraph};
 
@@ -64,7 +63,7 @@ impl FitTable {
                 let rem = tier as f64 * tier_step;
                 for a in 0..ACTIONS {
                     let g65 = gain_of(a);
-                    let gains = linked_gains(g65, band);
+                    let gains = p.rulebook.linked_gains(g65, band);
                     let mut w = [0.0f64; 3];
                     // Comfort + feedback, every level (worst case is
                     // whichever level trips; all three are checked). The
@@ -74,10 +73,10 @@ impl FitTable {
                     // near the patient's UCL.
                     for (li, &level) in LEVELS.iter().enumerate() {
                         let sp = speech_at(level, band);
-                        if gains[li] > 0.0 && sp + gains[li] > p.ucl[band] - UCL_GUARD_DB {
+                        if gains[li] > 0.0 && sp + gains[li] > p.ucl[band] - p.rulebook.ucl_guard_db {
                             w[0] = 1.0;
                         }
-                        if gains[li] > feedback_cap(band) + 1e-9 {
+                        if gains[li] > p.rulebook.feedback_cap(band) + 1e-9 {
                             w[2] = 1.0;
                         }
                     }
@@ -219,7 +218,7 @@ mod tests {
     use crate::domain_engine;
 
     fn patient() -> Patient {
-        Patient::generate(42)
+        Patient::generate(42, crate::rulebook::RULEBOOK_V1)
     }
 
     #[test]
@@ -238,7 +237,7 @@ mod tests {
         // Comfort: gain pushing loud speech past UCL−guard is flagged.
         let k = 3usize;
         let sp80 = speech_at(LEVELS[2], k);
-        let a_hot = ((p.ucl[k] - UCL_GUARD_DB - sp80 + 8.0) / 4.0).ceil() as usize;
+        let a_hot = ((p.ucl[k] - p.rulebook.ucl_guard_db - sp80 + 8.0) / 4.0).ceil() as usize;
         if a_hot < ACTIONS {
             assert_eq!(env.table.viol[state_id(k, TIERS - 1)][a_hot][0], 1.0);
         }

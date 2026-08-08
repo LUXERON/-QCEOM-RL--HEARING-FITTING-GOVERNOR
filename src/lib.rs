@@ -13,6 +13,7 @@ pub mod auditory;
 pub mod fit_env;
 pub mod image;
 pub mod prescriptive;
+pub mod rulebook;
 
 use qceom_core::{EngineConfig, MathematicalRLEngine};
 

@@ -8,7 +8,8 @@
 //! 3 levels, gain in dB as u8) + 2 pad · CRC32 over bytes 0..88.
 //! Validation is fail-closed: magic → version → CRC → fingerprint.
 
-use crate::auditory::{linked_gains, Patient, BANDS};
+use crate::auditory::{Patient, BANDS};
+use crate::rulebook::Rulebook;
 
 pub const MAGIC: u32 = 0x5446_4351; // "QCFT" little-endian
 pub const VERSION: u32 = 1;
@@ -27,10 +28,11 @@ pub fn crc32(data: &[u8]) -> u32 {
     !crc
 }
 
-/// Hash the patient model + rulebook version: the provenance binding that
-/// makes a stale table detectable before it is trusted.
-pub fn patient_hash(p: &Patient, rulebook_version: u32) -> u64 {
-    let mut h: u64 = 0x9E37_79B9_7F4A_7C15 ^ rulebook_version as u64;
+/// Hash the patient model + the FULL rulebook content hash: the
+/// provenance binding that makes a stale table (re-measured ear OR
+/// revised rulebook) detectable before it is trusted.
+pub fn patient_hash(p: &Patient) -> u64 {
+    let mut h: u64 = 0x9E37_79B9_7F4A_7C15 ^ p.rulebook.hash();
     for k in 0..BANDS {
         h = h.rotate_left(7) ^ p.thr[k].to_bits();
         h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -40,10 +42,10 @@ pub fn patient_hash(p: &Patient, rulebook_version: u32) -> u64 {
     h.rotate_left(7) ^ p.budget.to_bits()
 }
 
-pub fn table_from_gains(g65: &[f64; BANDS]) -> [u8; TABLE_LEN] {
+pub fn table_from_gains(rb: &Rulebook, g65: &[f64; BANDS]) -> [u8; TABLE_LEN] {
     let mut t = [0u8; TABLE_LEN];
     for k in 0..BANDS {
-        let gains = linked_gains(g65[k], k);
+        let gains = rb.linked_gains(g65[k], k);
         for (li, &g) in gains.iter().enumerate() {
             t[k * 3 + li] = g.round() as u8;
         }
@@ -112,6 +114,7 @@ pub fn validate(img: &[u8]) -> Result<ValidImage, ImageError> {
 mod tests {
     use super::*;
     use crate::fit_env::{extract_gains, FitEnv};
+    use crate::rulebook::{RULEBOOK_V1, RULEBOOK_V2};
     use crate::domain_engine;
 
     #[test]
@@ -121,11 +124,11 @@ mod tests {
 
     #[test]
     fn image_roundtrip_and_fail_closed() {
-        let p = Patient::generate(42);
+        let p = Patient::generate(42, RULEBOOK_V1);
         let env = FitEnv::new(&p);
         let (policy, _) = domain_engine().train(&env);
-        let table = table_from_gains(&extract_gains(&env, &policy));
-        let phash = patient_hash(&p, VERSION);
+        let table = table_from_gains(&p.rulebook, &extract_gains(&env, &policy));
+        let phash = patient_hash(&p);
         let img = build(0xEA12_0042, phash, &table);
         let v = validate(&img).expect("valid");
         assert_eq!(v.serial, 0xEA12_0042);
@@ -140,8 +143,9 @@ mod tests {
         assert_eq!(validate(&bad).unwrap_err(), ImageError::FingerprintMismatch);
         // A different patient (or rulebook version) changes the hash: the
         // stale-table detection that anchors the reviewability posture.
-        let p2 = Patient::generate(43);
-        assert_ne!(patient_hash(&p2, VERSION), phash);
-        assert_ne!(patient_hash(&p, VERSION + 1), phash);
+        let p2 = Patient::generate(43, RULEBOOK_V1);
+        assert_ne!(patient_hash(&p2), phash);
+        let p_v2 = Patient::generate(42, RULEBOOK_V2);
+        assert_ne!(patient_hash(&p_v2), phash);
     }
 }
