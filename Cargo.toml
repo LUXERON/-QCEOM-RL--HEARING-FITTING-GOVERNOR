@@ -1,0 +1,18 @@
+[package]
+name = "hearing-gov"
+version = "0.1.0"
+edition = "2021"
+license = "PROPRIETARY"
+authors = ["LUXERON"]
+description = "[QCEOM RL] Hearing-aid fitting governor - exact-DP gain tables maximizing SII under hard comfort/loudness/feedback gates, vs prescriptive and greedy incumbents."
+
+[dependencies]
+qceom-core = { git = "ssh://git@github.com/LUXERON/QCEOM-RL-CORE-KERNEL.git" }
+
+[[bin]]
+name = "fitting-bench"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
