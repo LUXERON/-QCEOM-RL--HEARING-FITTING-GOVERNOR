@@ -54,8 +54,30 @@ pub fn audibility(speech_spl: f64, gain_db: f64, thr_spl: f64) -> f64 {
     ((speech_spl + gain_db - thr_spl) / 30.0).clamp(0.0, 1.0)
 }
 
-/// Compressive loudness proxy for the broadband budget.
+/// Moore–Glasberg-form specific loudness (the declared model since plan
+/// 3 / B1): N' = C·[(E + A)^α − A^α] on sensation ENERGY E = 10^(SL/10),
+/// zero at and below threshold, monotone, strongly compressive. α = 0.3
+/// so the single-band form reproduces the sone-scale anchor (loudness
+/// doubling per ~10 dB, Stevens' law 10^0.3 ≈ 2) — the full published MG
+/// parameterization reaches that via excitation-pattern summation, which
+/// remains roadmap along with binaural summation. Declared constants of
+/// MG SHAPE, not a claim of the published model.
+pub const MG_ALPHA: f64 = 0.3;
+pub const MG_A: f64 = 15.0;
+pub const MG_C: f64 = 0.25;
+
 pub fn loudness(speech_spl: f64, gain_db: f64, thr_spl: f64) -> f64 {
+    let sl = (speech_spl + gain_db - thr_spl).max(0.0);
+    if sl <= 0.0 {
+        return 0.0;
+    }
+    let e = 10f64.powf(sl / 10.0);
+    MG_C * ((e + MG_A).powf(MG_ALPHA) - MG_A.powf(MG_ALPHA))
+}
+
+/// The pre-B1 Stevens power-law proxy, retained ONLY for the measured
+/// Stevens→MG delta report in DOMAIN-BENCHMARK.md.
+pub fn loudness_stevens(speech_spl: f64, gain_db: f64, thr_spl: f64) -> f64 {
     let sl = (speech_spl + gain_db - thr_spl).max(0.0);
     sl.powf(0.6)
 }
@@ -194,6 +216,29 @@ mod tests {
         assert!(a.budget > 0.0);
         let c = Patient::generate(43);
         assert_ne!(a.thr, c.thr);
+    }
+
+    #[test]
+    fn mg_loudness_has_published_anchor_properties() {
+        // Exactly zero at/below threshold.
+        assert_eq!(loudness(30.0, 0.0, 60.0), 0.0);
+        assert_eq!(loudness(40.0, 20.0, 60.0), 0.0);
+        // Monotone in gain.
+        assert!(loudness(40.0, 30.0, 40.0) > loudness(40.0, 20.0, 40.0));
+        // Compressive: marginal loudness per dB decreases with level.
+        let d_lo = loudness(40.0, 21.0, 40.0) - loudness(40.0, 20.0, 40.0);
+        let d_hi = loudness(40.0, 41.0, 40.0) - loudness(40.0, 40.0, 40.0);
+        let r_lo = d_lo / loudness(40.0, 20.0, 40.0);
+        let r_hi = d_hi / loudness(40.0, 40.0, 40.0);
+        assert!(r_hi < r_lo, "relative growth must compress with level");
+        // Sone anchor: ~2x loudness per +10 dB in the moderate range
+        // (SL 40→50 dB; nearer threshold the +A knee steepens growth,
+        // which is the MG shape's intended low-level behavior).
+        let ratio = loudness(40.0, 50.0, 40.0) / loudness(40.0, 40.0, 40.0);
+        assert!(
+            (1.8..=2.2).contains(&ratio),
+            "doubling anchor violated: {ratio:.3} per 10 dB"
+        );
     }
 
     #[test]

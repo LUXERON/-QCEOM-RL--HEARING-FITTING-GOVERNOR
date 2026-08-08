@@ -62,5 +62,29 @@ share the same 4 dB gain lattice and the same rulebook.
    handed the incumbents 1–2 dB/band the DP could not express — snap
    after cap.
 
-Reproduce: `cargo test --release` (11/11) then
+Reproduce: `cargo test --release` (12/12) then
 `cargo run --release --bin fitting-bench`.
+
+## B1 addendum — Moore–Glasberg-form loudness (plan 3, measured)
+
+The declared loudness model is now MG-form specific loudness
+N' = C·[(E+A)^α − A^α] on sensation energy (α=0.3 so the single-band
+shape reproduces the sone doubling anchor at moderate SL; property tests
+in `auditory.rs`). Full benchmark re-run under MG, same frozen criteria:
+
+| | Stevens proxy (pre-B1) | MG form (B1) |
+|---|---|---|
+| Governed mean SII | 0.2718 | **0.2780** |
+| Plain-DP reference | 0.2718 | 0.2780 |
+| Greedy | 0.2635 | 0.2707 |
+| Prescriptive | 0.0468 | 0.0468 |
+| Verdicts | 6/6 PASS | **6/6 PASS** |
+| DP > greedy | 38/40 | 36/40 |
+
+Kernel = plain-DP optimum EXACTLY under both models (L9 probe re-run).
+The MG knee near threshold makes low-SL gain cheaper in loudness, so
+every fitter serves slightly more audibility from the same budget; the
+governed-vs-greedy gap narrows to +2.7% but remains strict on 36/40.
+One anchor-test MISS during bring-up is kept honest: the doubling ratio
+was first probed at SL 30→40 where the +A knee legitimately steepens
+growth (measured 2.38×); the anchor holds at SL 40→50 (2.16×).
